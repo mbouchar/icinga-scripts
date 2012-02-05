@@ -1,0 +1,5 @@
+nagios-plugins-mindeval (0.1.0) unstable; urgency=low
+
+  * Initial release
+
+ -- Mathieu Bouchard <mbouchar@gmail.com>  Fri, 26 Nov 2010 02:39:54 +0000

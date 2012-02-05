@@ -1,0 +1,15 @@
+Source: nagios-plugins-mindeval
+Section: admin
+Priority: extra
+Maintainer: Mathieu Bouchard <mbouchar@gmail.com>
+Build-Depends: debhelper (>= 7)
+Standards-Version: 3.8.3
+Homepage: http://www.mindeval.com
+
+Package: nagios-plugins-mindeval
+Architecture: all
+Depends: ${shlibs:Depends}, ${misc:Depends}, nagios-nrpe-server, nagios-plugins
+Description: Additional nagios scripts
+ This package contains additional nagios scripts that are used
+ to monitor Mindeval applications. Included is a script to monitor
+ available memory.
