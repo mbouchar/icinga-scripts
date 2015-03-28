@@ -1,0 +1,198 @@
+#!/usr/bin/env python
+
+'''
+check_solr.py - v0.2 -  Chris Ganderton <github@thefraggle.com>
+check_solr.py - v0.3 -  Mathieu Bouchard <mathieu.bouchard@revenuquebec.ca>
+
+Icinga/Nagios check script for checking replication issues and ping status on solr slaves.
+
+We simply get the local generation that the core reports it has, and
+then query the maximum possible replicateableGeneration the master has told the core about.
+
+EXAMPLE: ./check_solr_rep.py -H localhost -p 8093 -W solr -r -w 10 -c 20
+'''
+
+import urllib, json, sys
+from optparse import OptionParser
+
+def listcores():
+    status_cmd  = baseurl + core_admin_url + urllib.urlencode({'action':'status','wt':'json'})
+    cores       = set()
+
+    res         = urllib.urlopen(status_cmd)
+    data        = json.loads(res.read())
+
+    core_data   = data['status']
+
+    for core_name in core_data:
+        cores.add(core_name)
+
+    return cores
+
+def repstatus(core):
+    rep_cmd     = baseurl + core + '/replication?' + urllib.urlencode({'command':'details','wt':'json'})
+
+    rres        = urllib.urlopen(rep_cmd)
+    rdata       = json.loads(rres.read())
+
+    localgeneration  = rdata['details'].get('generation')
+    mastergeneration = rdata['details']['slave']['masterDetails']['master'].get('replicatableGeneration')
+
+    if mastergeneration == None or localgeneration == None:
+        status = "CRITICAL"
+        return status
+
+    generationdiff   = mastergeneration - localgeneration
+
+    if generationdiff > threshold_warn:
+        status = "WARNING"
+    elif generationdiff > threshold_crit:
+        status = "CRITICAL"
+    else:
+        status = "UNKNOWN"
+
+    return status
+
+def solrping(core):
+    if len(core):
+        ping_cmd = baseurl + core + '/admin/ping?' + urllib.urlencode({'wt':'json'})
+    else:
+        ping_cmd = baseurl + 'admin/ping?' + urllib.urlencode({'wt':'json'})
+
+    res = urllib.urlopen(ping_cmd)
+    data = json.loads(res.read())
+
+    status = data.get('status')
+
+    return status
+
+def solrquery(core, query):
+    ping_cmd = "%s%s/select?%s" % (baseurl, core, urllib.urlencode({'q':query, 'wt':'json'}))
+
+    res = urllib.urlopen(ping_cmd)
+    data = json.loads(res.read())
+
+    if 'response' in data and 'numFound' in data['response']:
+        return (data['response']['numFound'] > 0)
+
+    return False
+
+def main():
+    global baseurl, core_admin_url, threshold_warn, threshold_crit
+
+    cmd_parser = OptionParser(version="%prog 0.1")
+    cmd_parser.add_option("-H", "--host", type="string", action="store", dest="solr_server", default="localhost", help="SOLR Server address")
+    cmd_parser.add_option("-p", "--port", type="string", action="store", dest="solr_server_port", help="SOLR Server port")
+    cmd_parser.add_option("-W", "--webapp", type="string", action="store", dest="solr_server_webapp", help="SOLR Server webapp path")
+    cmd_parser.add_option("-P", "--ping", action="store_true", dest="check_ping", help="SOLR Ping", default=False)
+    cmd_parser.add_option("-r", "--replication", action="store_true", dest="check_replication", help="SOLR Replication check", default=False)
+    cmd_parser.add_option("-q", "--query", type="string", action="store", dest="query", help="SOLR Query", default=None)
+    cmd_parser.add_option("-w", "--warn", type="int", action="store", dest="threshold_warn", help="WARN threshold for replication check", default=1)
+    cmd_parser.add_option("-c", "--critical", type="int", action="store", dest="threshold_crit", help="CRIT threshold for replication check", default=2)
+    cmd_parser.add_option("-i", "--ignore", type="string", action="append", dest="ignore_cores", help="SOLR Cores to ignore", default=[])
+    cmd_parser.add_option("-C", "--cores", type="string", action="append", dest="required_cores", help="SOLR Cores that must be found", default=[])
+    cmd_parser.add_option("-s", "--https", action="store_true", dest="use_https", help="Use HTTPS to connect to SOLR", default=False)
+
+    (cmd_options, cmd_args) = cmd_parser.parse_args()
+
+    if not (cmd_options.solr_server and cmd_options.solr_server_port and cmd_options.solr_server_webapp):
+        cmd_parser.error("host (-H), port (-p) and webapp path (-W) are required")
+
+    if not cmd_options.check_replication and not cmd_options.check_ping and not cmd_options.query:
+        cmd_parser.error("please specify -r, -P or -q")
+
+    if ((cmd_options.threshold_warn and not cmd_options.threshold_crit) or (cmd_options.threshold_crit and not cmd_options.threshold_warn)):
+        cmd_parser.error("please use -w and -c together.")
+
+    if cmd_options.threshold_crit <= cmd_options.threshold_warn:
+        cmd_parser.error("the value for (-c|--critical) must be greater than (-w|--warn)")
+
+    solr_server         = cmd_options.solr_server
+    solr_server_port    = cmd_options.solr_server_port
+    solr_server_webapp  = cmd_options.solr_server_webapp
+    check_ping          = cmd_options.check_ping
+    check_replication   = cmd_options.check_replication
+    query_string        = cmd_options.query
+    threshold_warn      = cmd_options.threshold_warn
+    threshold_crit      = cmd_options.threshold_crit
+    ignore_cores        = set(cmd_options.ignore_cores)
+    required_cores      = set(cmd_options.required_cores)
+
+    core_admin_url      = 'admin/cores?'
+    protocol            = 'http'
+    if cmd_options.use_https:
+        protocol        = 'https'
+    baseurl = "%s://%s:%s/%s/" % (protocol, solr_server, solr_server_port, solr_server_webapp)
+
+    repwarn             = set()
+    repcrit             = set()
+
+    pingerrors          = set()
+    queryerrors         = set()
+    coreserrors         = set()
+
+    try:
+        all_cores = listcores()
+    except IOError as (errno, strerror):
+        print "CRITICAL: {0} - {1}".format(errno,strerror)
+        return(2)
+    except (ValueError, TypeError):
+        all_cores = set([''])
+    except:
+        print "CRITICAL: Unknown error"
+        return(3)
+
+    cores = all_cores - ignore_cores
+    for core in required_cores:
+        if core not in cores:
+            coreserrors.add(core)
+
+    # XXX: This is ugly...
+    try:
+        for core in cores:
+            if check_replication:
+                ret = repstatus(core)
+                if ret == 'CRITICAL':
+                    repcrit.add(core)
+                elif ret == 'WARNING':
+                    repwarn.add(core)
+            if check_ping:
+                if solrping(core) != 'OK':
+                    pingerrors.add(core)
+            if query_string is not None:
+                if not solrquery(core, query_string):
+                    queryerrors.add(core)
+    except IOError as (errno, strerror):
+        print "CRITICAL: {0} {1} ".format(errno, strerror)
+        return(2)
+    except KeyError as strerror:
+        if 'slave' in strerror:
+            print "CRITCAL: This doesn't seem to be a slave, are you sure you meant to call -r?"
+            return(2)
+        else:
+            print "CRITICAL: unknown error (error string: {0})".format(strerror)
+            print strerror
+            return(3)
+
+    if pingerrors:
+        print "CRITICAL: Error pinging cores(s) - {0}. Tested core(s) - {1} |TotalOKCores={2}".format(", ".join(pingerrors), ", ".join(cores), len(cores-pingerrors))
+        return(2)
+    elif queryerrors:
+        print "CRITICAL: Error querying cores(s) - {0}. Tested core(s) - {1} |TotalOKCores={2}".format(", ".join(queryerrors), ", ".join(cores), len(cores-queryerrors))
+        return(2)
+    elif coreserrors:
+        print "CRITICAL: Required cores(s) missing - {0}. Tested core(s) - {1} |TotalOKCores={2}".format(", ".join(coreserrors), ", ".join(cores), len(cores-coreserrors))
+        return(2)
+    elif repcrit:
+        print "CRITICAL: Replication errors on cores(s) - {0}. Tested core(s) - {1} |TotalOKCores={2}".format(", ".join(repcrit), ", ".join(cores), len(cores-repcrit))
+        return(2)
+    elif repwarn:
+        print "WARNING: Replication errors on cores(s) - {0}. Tested core(s) - {1} |TotalOKCores={2}".format(", ".join(repwarn), ", ".join(cores), len(cores-repwarn))
+        return(1)
+    else:
+        print "OK. Tested core(s) - {0} |TotalOKCores={1}".format(", ".join(cores), len(cores))
+        return(0)
+
+if __name__ == '__main__':
+    sys.exit(main())
+
