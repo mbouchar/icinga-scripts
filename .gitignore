@@ -1,0 +1,4 @@
+debian/files
+debian/icinga-plugins-extra-apps.debhelper.log
+debian/icinga-plugins-extra-apps.substvars
+debian/icinga-plugins-extra-apps/

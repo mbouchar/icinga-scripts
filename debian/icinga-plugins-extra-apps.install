@@ -1,1 +1,2 @@
 check_mem_avail /usr/lib/nagios/plugins/
+check_solr /usr/lib/nagios/plugins/

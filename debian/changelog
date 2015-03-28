@@ -1,4 +1,10 @@
-nagios-plugins-mindeval (0.1.0) unstable; urgency=low
+icinga-plugins-extra-apps (0.2) UNRELEASED; urgency=medium
+
+  * Add solr script
+
+ -- Mathieu Bouchard <mbouchar@gmail.com>  Sat, 28 Mar 2015 14:23:32 -0400
+
+icinga-plugins-extra-apps (0.1) UNRELEASED; urgency=low
 
   * Initial release
 
